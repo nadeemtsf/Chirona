@@ -80,5 +80,7 @@ Press **ESC** or click the **X** button to exit.
 
 ---
 
+> ⚠️ **Note:** This project is in its very early stages. The project name, features, and structure shown here are temporary and subject to change.
+
 Made with ❤️ and Python
-Done By Michael Musallam and Nadim Baboun
+Done By [Michael Musallam](https://github.com/michealmou) and [Nadim Baboun](https://github.com/nadeemtsf)
