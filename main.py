@@ -6,6 +6,8 @@ from core.hand_detector import HandDetector
 from core.feature_extractor import FeatureExtractor
 from controllers.mouse_controller import MouseController
 from controllers.sign_language_controller import SignLanguageController
+from core.sign_classifier import SignClassifier
+from core.feature_extractor import FeatureExtractor
 from config import (
     CAMERA_INDEX, CAM_WIDTH, CAM_HEIGHT,
     MAX_HANDS, DETECTION_CONFIDENCE, TRACKING_CONFIDENCE,
@@ -37,7 +39,8 @@ except FileNotFoundError:
 cap = cv2.VideoCapture(CAMERA_INDEX)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT)
-
+fe = FeatureExtractor(use_z=False)  # Must match training config
+classifier = SignClassifier('models/trained_model.pkl')
 if not cap.isOpened():
     print("Failed to open camera")
     exit()
@@ -60,6 +63,7 @@ while True:
 
     # Process first detected hand with the active controller
     if hands_data:
+<<<<<<< Updated upstream
         hand = hands_data[0]
         landmarks = hand['landmarks']
         
@@ -77,6 +81,21 @@ while True:
         # Still use original controller logic
         controllers[mode].process_frame(frame, hand, detector)
         #prediction = model.predict(normalized.reshape(1, -1))       
+=======
+        controllers[mode].process_frame(frame, hands_data[0], detector)
+        hand = hands_data[0]
+        landmarks = hand['landmarks']
+
+        #extract and normalize features
+        features = fe.extract(landmarks)
+        normalized_features = fe.normalize(features)
+
+        # predict gesture
+        label, confidence = classifier.predict(normalized_features)
+        # display result
+        cv2.putText(frame, f'{label} ({confidence:.1%})',
+                    (10, 250), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+>>>>>>> Stashed changes
 
     # Calculate FPS
     current_time = time.time()
