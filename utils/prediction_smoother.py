@@ -8,7 +8,7 @@ from collections import Counter, deque
 from config import SMOOTHING_WINDOW_SIZE, SMOOTHING_DOMINANCE_THRESHOLD
 
 class PredictionSmoother:
-    def __init__(self, window_size = SMOOTHING_WINDOW_SIZE, dominance_threshold = SMOOTHING_DOMINANCE_THRESHOLD):
+    def __init__(self, window_size=SMOOTHING_WINDOW_SIZE, dominance_threshold=SMOOTHING_DOMINANCE_THRESHOLD):
         self.window_size = window_size
         self.dominance_threshold = dominance_threshold
         self.prediction_history = deque(maxlen=window_size)
