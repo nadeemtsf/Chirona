@@ -1,8 +1,8 @@
 """
-Main entry point for the Chirona application.
+Main entry point for the Chirona Sign Language application.
 
-Initializes the hardware, machine learning models, and controllers to translate
-real-time hand gestures into actionable commands or sign language translation.
+Initializes the hardware, machine learning models, and feature extractors
+to translate real-time hand gestures into actionable sign language translation.
 """
 
 import pickle
@@ -11,22 +11,20 @@ import time
 import sys
 import logging
 import numpy as np
+import tkinter as tk
+from tkinter import ttk
 
-from xml.parsers.expat import model
+from core.config_manager import config_mgr
 from core.sign_classifier import SignClassifier
 from core.hand_detector import HandDetector
 from utils.text_overlay import draw_prediction, draw_sentence_builder_ui
 from core.feature_extractor import FeatureExtractor
 from core.sentence_builder import SentenceBuilder
 from utils.prediction_smoother import PredictionSmoother
-from controllers.mouse_controller import MouseController
-from controllers.sign_language_controller import SignLanguageController
+
 from config import (
     CAMERA_INDEX, CAM_WIDTH, CAM_HEIGHT,
-    MAX_HANDS, DETECTION_CONFIDENCE, TRACKING_CONFIDENCE,
-    SMOOTHING_ALPHA, WINDOW_TITLE, CONFIDENCE_THRESHOLD,
-    SMOOTHING_WINDOW_SIZE, SMOOTHING_DOMINANCE_THRESHOLD,
-    COLOR_PRIMARY
+    COLOR_PRIMARY, WINDOW_TITLE, CONFIDENCE_THRESHOLD
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,14 +34,9 @@ class ChironaApp:
         self._setup()
         
     def _setup(self):
-        """Initialize models, controllers, and hardware."""
-        self.controllers = {
-            "mouse": MouseController(alpha=SMOOTHING_ALPHA),
-            "sign_language": SignLanguageController(),
-        }
-        
+        """Initialize models and hardware."""
         # Initialize hand detector (start in single hand mode)
-        self.detector = HandDetector(1, DETECTION_CONFIDENCE, TRACKING_CONFIDENCE)
+        self.detector = HandDetector(max_hands=1)
         self.fe = FeatureExtractor(use_z=False)  # Must match training config
         
         # Load trained sign language model
@@ -68,13 +61,9 @@ class ChironaApp:
             
         # Runtime state variables
         self.prev_time = 0
-        self.mode = "sign_language"  # start in sign language mode
         self.max_hands_mode = 1 # start with single hand mode
         
-        self.smoother = PredictionSmoother(
-            window_size=SMOOTHING_WINDOW_SIZE, 
-            dominance_threshold=SMOOTHING_DOMINANCE_THRESHOLD
-        )
+        self.smoother = PredictionSmoother()
         self.sentence_builder = SentenceBuilder()
         self.displayed_sign = None
         self.displayed_confidence = None
@@ -111,13 +100,8 @@ class ChironaApp:
         """Handle keyboard input. Returns False if app should exit."""
         key = cv2.waitKey(1) & 0xFF
         
-        # Toggle control modes 
-        if key == ord('m'):
-            self.mode = "sign_language" if self.mode == "mouse" else "mouse"
-            self.sentence_builder.clear()
-            
-        # Manually add space with spacebar when in sign language mode
-        if key == ord(' ') and self.mode == "sign_language":
+        # Manually add space with spacebar
+        if key == ord(' '):
             self.sentence_builder.add_space()
             
         if key == ord('h'):
@@ -126,68 +110,142 @@ class ChironaApp:
             self.detector.hands.max_num_hands = self.max_hands_mode
             print(f'Hand dectection mode: {self.max_hands_mode} hand(s)')
             
+        if key == ord('s'):
+            # Toggle settings visibility
+            if self.is_hidden:
+                self.root.deiconify()
+                self.is_hidden = False
+            else:
+                self.root.withdraw()
+                self.is_hidden = True
+            
         # Exit on Escape key or window close
         if key == 27 or cv2.getWindowProperty(WINDOW_TITLE, cv2.WND_PROP_VISIBLE) < 1:
             return False
             
         return True
 
+    def setup_ui(self):
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text="Sign Language Translator", font=("Arial", 14, "bold")).pack(pady=5)
+        
+        # Helpers
+        def create_slider(label, key, from_, to, resolution=1.0):
+            frame = ttk.Frame(main_frame)
+            frame.pack(fill=tk.X, pady=5)
+            
+            ttk.Label(frame, text=label).pack(side=tk.LEFT)
+            val_label = ttk.Label(frame, text=f"{config_mgr.get(key):.2f}")
+            val_label.pack(side=tk.RIGHT)
+            
+            var = tk.DoubleVar(value=config_mgr.get(key))
+            
+            def on_change(*args):
+                v = var.get()
+                if resolution >= 1.0: v = int(v)
+                val_label.config(text=f"{v:.2f}")
+                config_mgr.set(key, v)
+                
+            slider = ttk.Scale(frame, from_=from_, to=to, variable=var, command=on_change)
+            slider.pack(side=tk.BOTTOM, fill=tk.X, expand=True)
+            return var
+            
+        ttk.Separator(main_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Label(main_frame, text="MediaPipe Settings (Requires Apply)").pack()
+        
+        self.det_conf_var = create_slider("Detection Conf", "DETECTION_CONFIDENCE", 0.1, 1.0, 0.01)
+        self.trk_conf_var = create_slider("Tracking Conf", "TRACKING_CONFIDENCE", 0.1, 1.0, 0.01)
+        
+        def apply_mp():
+            self.detector.update_settings(
+                self.det_conf_var.get(),
+                self.trk_conf_var.get()
+            )
+            config_mgr.set('DETECTION_CONFIDENCE', self.det_conf_var.get())
+            config_mgr.set('TRACKING_CONFIDENCE', self.trk_conf_var.get())
+        ttk.Button(main_frame, text="Apply MediaPipe Changes", command=apply_mp).pack(pady=10)
+        
+        ttk.Separator(main_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+        
+        def save_state():
+            config_mgr.save_config()
+        ttk.Button(main_frame, text="Save Configuration Defaults", command=save_state).pack(pady=5)
+        
+        ttk.Label(main_frame, text="Press 's' in video feed to toggle this module", foreground="gray").pack(side=tk.BOTTOM, pady=5)
+
+    def update_frame(self):
+        """Timer-driven frame processor fired by Tkinter."""
+        success, frame = self.cap.read()
+        if not success:
+            print("Failed to read frame")
+            self.cleanup_and_exit()
+            return
+
+        frame = cv2.flip(frame, 1)
+        hands_data = self.detector.detect(frame)
+        frame = self.detector.draw_hands(frame, hands_data)
+        
+        self.frame_count += 1
+
+        # Process first detected hand
+        if hands_data:
+            first_hand = hands_data[0]
+            self._process_prediction(first_hand)
+
+        # Calculate FPS
+        current_time = time.time()
+        fps = 1 / (current_time - self.prev_time) if self.prev_time > 0 else 0
+        self.prev_time = current_time
+
+        # Update sentence builder
+        if hands_data:
+            self.sentence_builder.update(self.displayed_sign, current_time)
+        else:
+            self.sentence_builder.update(None, current_time)
+
+        # Display info text overlays
+        cv2.putText(frame, f'FPS: {int(fps)}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 2)
+        cv2.putText(frame, f'Hands: {self.max_hands_mode}', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 2)
+        cv2.putText(frame, 'Mode: Sign Language', (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 2)
+        
+        if self.classifier is None:
+            cv2.putText(frame, f'Min confidence: {CONFIDENCE_THRESHOLD:.0%}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 1)
+
+        # Display predicted sign bar if available
+        if self.displayed_sign and self.displayed_confidence:
+            draw_prediction(frame, self.displayed_sign, self.displayed_confidence)
+
+        # Display sentence builder UI
+        draw_sentence_builder_ui(frame, self.sentence_builder, current_time)
+
+        cv2.imshow(WINDOW_TITLE, frame)
+
+        # Break loop if _handle_keypress asks to exit
+        if not self._handle_keypress():
+            self.cleanup_and_exit()
+            return
+            
+        # Recursive native loop
+        self.root.after(10, self.update_frame)
+
+    def cleanup_and_exit(self):
+        self.cleanup()
+        self.root.quit()
+
     def run(self):
         """Main application runtime loop."""
-        while True:
-            success, frame = self.cap.read()
-            if not success:
-                print("Failed to read frame")
-                break
-
-            frame = cv2.flip(frame, 1)
-            hands_data = self.detector.detect(frame)
-            frame = self.detector.draw_hands(frame, hands_data)
-            
-            self.frame_count += 1
-
-            # Process first detected hand with the active controller
-            if hands_data:
-                first_hand = hands_data[0]
-                
-                if self.mode == "sign_language":
-                    self._process_prediction(first_hand)
-                elif self.mode == "mouse":
-                    self.controllers[self.mode].process_frame(frame, first_hand, self.detector)
-
-            # Calculate FPS
-            current_time = time.time()
-            fps = 1 / (current_time - self.prev_time) if self.prev_time > 0 else 0
-            self.prev_time = current_time
-
-            # Update sentence builder
-            if self.mode == "sign_language":
-                if hands_data:
-                    self.sentence_builder.update(self.displayed_sign, current_time)
-                else:
-                    self.sentence_builder.update(None, current_time)
-
-            # Display info text overlays
-            cv2.putText(frame, f'FPS: {int(fps)}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 2)
-            cv2.putText(frame, f'Hands: {self.max_hands_mode}', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 2)
-            cv2.putText(frame, f'Mode: {self.mode}', (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 2)
-            
-            if self.mode == 'sign_language' and self.classifier is None:
-                cv2.putText(frame, f'Min confidence: {CONFIDENCE_THRESHOLD:.0%}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_PRIMARY, 1)
-
-            # Display predicted sign bar if available
-            if self.mode == "sign_language" and self.displayed_sign and self.displayed_confidence:
-                draw_prediction(frame, self.displayed_sign, self.displayed_confidence)
-
-            # Display sentence builder UI
-            if self.mode == "sign_language":
-                draw_sentence_builder_ui(frame, self.sentence_builder, current_time)
-
-            cv2.imshow(WINDOW_TITLE, frame)
-
-            # Break loop if _handle_keypress asks to exit
-            if not self._handle_keypress():
-                break
+        self.root = tk.Tk()
+        self.root.title("Chirona Settings")
+        self.root.geometry("380x350")
+        
+        self.is_hidden = False
+        self.setup_ui()
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.cleanup_and_exit)
+        self.root.after(10, self.update_frame)
+        self.root.mainloop()
 
         self.cleanup()
 

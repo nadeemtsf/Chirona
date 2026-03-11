@@ -16,15 +16,32 @@ from config import(
 )
 
 class HandDetector:
-    def __init__(self, max_hands=MAX_HANDS, detection_confidence=DETECTION_CONFIDENCE, tracking_confidence=TRACKING_CONFIDENCE):
+    def __init__(self, max_hands=None, detection_confidence=None, tracking_confidence=None):
+        from core.config_manager import config_mgr
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
+        
+        self.max_hands = max_hands if max_hands else config_mgr.get('MAX_HANDS')
+        self.det_conf = detection_confidence if detection_confidence else config_mgr.get('DETECTION_CONFIDENCE')
+        self.trk_conf = tracking_confidence if tracking_confidence else config_mgr.get('TRACKING_CONFIDENCE')
+        
+        self._init_mediapipe()
+        
+    def _init_mediapipe(self):
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=max_hands,
-            min_detection_confidence=detection_confidence,
-            min_tracking_confidence=tracking_confidence
+            max_num_hands=self.max_hands,
+            min_detection_confidence=self.det_conf,
+            min_tracking_confidence=self.trk_conf
         )
+        
+    def update_settings(self, detection_conf, tracking_conf, max_hands=None):
+        """Force recreate the MediaPipe backend when user presses Apply button."""
+        self.det_conf = detection_conf
+        self.trk_conf = tracking_conf
+        if max_hands is not None:
+            self.max_hands = max_hands
+        self._init_mediapipe()
     
     def detect(self, frame):
         """
